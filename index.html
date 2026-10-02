@@ -1,19 +1,139 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'><meta name='theme-color' content='#111'><link rel='manifest' href='manifest.webmanifest'><title>Vanquish Mapper</title><style>
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background:#0d0d0f;color:#fff}header{padding:18px 16px 8px}h1{font-size:24px;margin:0}.sub{color:#aaa;font-size:13px;margin-top:4px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 16px}.card{background:#1b1b1f;border-radius:14px;padding:14px}.big{font-size:27px;font-weight:700}.label{font-size:12px;color:#aaa}.controls{padding:6px 16px 12px;display:flex;gap:8px;flex-wrap:wrap}button{border:0;border-radius:12px;padding:12px 15px;font-weight:650;font-size:15px}#start{background:#fff;color:#000}#stop{background:#333;color:#fff}#export{background:#333;color:#fff}button:disabled{opacity:.4}canvas{width:calc(100% - 32px);height:310px;margin:0 16px;background:#151519;border-radius:14px;touch-action:none}.range{padding:4px 16px 14px}.range input{width:100%}.status{padding:8px 16px;color:#bbb;font-size:13px;min-height:36px}.legend{padding:8px 16px 20px;font-size:12px;color:#999} .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#fff;margin-right:5px}
-</style></head><body><header><h1>Vanquish Mapper</h1><div class='sub'>Phone microphone + GPS prototype</div></header>
-<div class='grid'><div class='card'><div class='label'>DETECTOR LEVEL</div><div class='big' id='db'>-- dB</div></div><div class='card'><div class='label'>DOMINANT TONE</div><div class='big' id='hz'>-- Hz</div></div><div class='card'><div class='label'>GPS ACCURACY</div><div class='big' id='acc'>--</div></div><div class='card'><div class='label'>SAMPLES</div><div class='big' id='count'>0</div></div></div>
-<div class='range'><div class='label'>DISPLAY SENSITIVITY</div><input id='sens' type='range' min='0.5' max='4' step='.1' value='1.7'></div>
-<div class='controls'><button id='start'>Start Scan</button><button id='stop' disabled>Stop</button><button id='export' disabled>Export CSV</button></div>
-<canvas id='map' width='800' height='620'></canvas><div class='status' id='status'>Tap Start Scan and allow microphone and location access.</div><div class='legend'><span class='dot'></span>Each circle is a GPS-tagged audio sample. Larger/brighter circles represent stronger detector audio. This prototype does not claim survey-grade positioning.</div>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101317">
+<title>Vanquish Mapper v3</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#0d0f12;--card:#171b20;--muted:#9ca6b3;--fg:#f5f7fa;--line:#2a3038}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+header{padding:17px 14px 8px}.wrap{padding:8px 10px 28px;max-width:1000px;margin:auto}
+h1{font-size:23px;margin:0}.sub,.status,.legend{color:var(--muted);font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:11px}
+.label{font-size:10px;color:var(--muted);letter-spacing:.06em}.big{font-size:25px;font-weight:750;margin-top:3px}.small{font-size:13px;margin-top:4px}
+.meter{height:16px;background:#080a0c;border-radius:9px;overflow:hidden;border:1px solid var(--line);margin-top:7px}.bar{height:100%;width:0%;background:#eee}
+.controls{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0}.controls button{border:0;border-radius:10px;padding:11px 13px;font-weight:700;font-size:14px}.controls button:disabled{opacity:.4}
+.sliders{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:8px 10px;margin:8px 0}
+.row{display:flex;gap:8px;align-items:center;font-size:12px;margin:6px 0}.row input[type=range]{flex:1}
+.toggles{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin:8px 1px}
+#map{height:52vh;min-height:390px;border-radius:14px;border:1px solid var(--line);overflow:hidden;background:#111}
+.status{margin:8px 2px}.legend{line-height:1.45;margin:7px 2px}
+.heat-legend{position:absolute;z-index:800;right:10px;bottom:24px;background:rgba(10,10,10,.72);padding:7px;border-radius:8px;color:#fff;font-size:10px;pointer-events:none}
+.grad{width:120px;height:8px;border-radius:5px;background:linear-gradient(90deg,#244cff,#00d5ff,#00db63,#ffe600,#ff2b1a);margin-top:4px}
+@media(min-width:700px){.grid{grid-template-columns:repeat(4,1fr)}}
+</style>
+</head>
+<body>
+<header><h1>Vanquish Mapper <span style="font-size:13px;color:#aaa">v3</span></h1>
+<div class="sub">Imagery basemap • faded heat surface • adaptive audio detection</div></header>
+<div class="wrap">
+<div class="grid">
+<div class="card"><div class="label">AUDIO</div><div class="big" id="db">-- dB</div><div class="small">Noise <span id="noise">--</span> dB</div></div>
+<div class="card"><div class="label">TONE</div><div class="big" id="hz">-- Hz</div><div class="small" id="family">Waiting</div></div>
+<div class="card"><div class="label">TARGET SCORE</div><div class="big" id="score">0</div><div class="meter"><div class="bar" id="bar"></div></div></div>
+<div class="card"><div class="label">GPS ACCURACY</div><div class="big" id="acc">-- m</div><div class="small"><span id="events">0</span> events</div></div>
+</div>
+
+<div class="sliders">
+<div class="row"><span>Detection threshold</span><input id="threshold" type="range" min="5" max="25" value="10"><span id="thrval">10 dB</span></div>
+<div class="row"><span>Heat opacity</span><input id="opacity" type="range" min="10" max="100" value="58"><span id="opval">58%</span></div>
+<div class="row"><span>Heat radius</span><input id="radius" type="range" min="8" max="55" value="28"><span id="radval">28</span></div>
+<div class="toggles">
+<label><input id="imagery" type="checkbox" checked> Imagery</label>
+<label><input id="heatToggle" type="checkbox" checked> Heat map</label>
+<label><input id="trackToggle" type="checkbox" checked> GPS track</label>
+<label><input id="pointToggle" type="checkbox"> Detection points</label>
+<label><input id="accuracyToggle" type="checkbox"> GPS accuracy</label>
+</div></div>
+
+<div class="controls">
+<button id="start">Start Scan</button><button id="stop" disabled>Stop</button>
+<button id="cal" disabled>Recalibrate</button><button id="center">Center</button><button id="export" disabled>Export CSV</button>
+</div>
+<div class="status" id="status">Tap Start Scan. Keep the detector quiet for the first 2 seconds.</div>
+<div style="position:relative"><div id="map"></div><div class="heat-legend">weak&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;strong<div class="grad"></div></div></div>
+<div class="legend">Imagery is provided by Esri's World Imagery web tiles. Heat intensity uses the 0–100 detector score; overlapping responses reinforce the hotspot. The heat layer is visual interpolation—not a survey-accurate target boundary. Phone GPS error is shown separately and remains the main positioning limitation.</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script>
-const $=id=>document.getElementById(id); let ctxAudio,analyser,stream,watchId=null,running=false,lastSample=0,latestPos=null,samples=[]; const canvas=$('map'),g=canvas.getContext('2d');
-function setStatus(s){$('status').textContent=s}
-function dbFromTimeData(a){let sum=0;for(const v of a){const x=(v-128)/128;sum+=x*x}const rms=Math.sqrt(sum/a.length)||1e-8;return 20*Math.log10(rms)}
-function dominant(freq, sr){let mi=1,mv=0;for(let i=1;i<freq.length;i++){if(freq[i]>mv){mv=freq[i];mi=i}}return mi*sr/(2*freq.length)}
-function draw(){g.clearRect(0,0,canvas.width,canvas.height);g.fillStyle='#151519';g.fillRect(0,0,canvas.width,canvas.height);if(!samples.length){g.fillStyle='#777';g.font='28px -apple-system';g.textAlign='center';g.fillText('Scan points appear here',400,310);return}let lats=samples.map(s=>s.lat),lons=samples.map(s=>s.lon);let minLat=Math.min(...lats),maxLat=Math.max(...lats),minLon=Math.min(...lons),maxLon=Math.max(...lons);let dlat=Math.max(maxLat-minLat,1e-6),dlon=Math.max(maxLon-minLon,1e-6),pad=55;let dbs=samples.map(s=>s.db),mn=Math.min(...dbs),mx=Math.max(...dbs),sens=+$('sens').value;for(let s of samples){let x=pad+(s.lon-minLon)/dlon*(canvas.width-2*pad);let y=canvas.height-pad-(s.lat-minLat)/dlat*(canvas.height-2*pad);let n=(s.db-mn)/Math.max(mx-mn,1);n=Math.pow(n,1/sens);let r=4+n*25;g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fillStyle=`rgba(255,255,255,${.12+.82*n})`;g.fill()}g.fillStyle='#aaa';g.font='20px -apple-system';g.textAlign='left';g.fillText('Relative scan map',24,32)}
-async function start(){try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});ctxAudio=new (window.AudioContext||window.webkitAudioContext)();await ctxAudio.resume();let src=ctxAudio.createMediaStreamSource(stream);analyser=ctxAudio.createAnalyser();analyser.fftSize=2048;analyser.smoothingTimeConstant=.25;src.connect(analyser);watchId=navigator.geolocation.watchPosition(p=>{latestPos=p.coords;$('acc').textContent=Math.round(p.coords.accuracy)+' m'},e=>setStatus('Location error: '+e.message),{enableHighAccuracy:true,maximumAge:0,timeout:10000});running=true;$('start').disabled=true;$('stop').disabled=false;$('export').disabled=false;setStatus('Scanning. Keep the phone near the Vanquish speaker and sweep normally.');requestAnimationFrame(loop)}catch(e){setStatus('Could not start: '+e.message)}}
-function loop(t){if(!running)return;let td=new Uint8Array(analyser.fftSize),fd=new Uint8Array(analyser.frequencyBinCount);analyser.getByteTimeDomainData(td);analyser.getByteFrequencyData(fd);let db=dbFromTimeData(td),hz=dominant(fd,ctxAudio.sampleRate);$('db').textContent=db.toFixed(1)+' dB';$('hz').textContent=Math.round(hz)+' Hz';if(latestPos&&t-lastSample>=200){lastSample=t;samples.push({time:new Date().toISOString(),lat:latestPos.latitude,lon:latestPos.longitude,accuracy:latestPos.accuracy,db,hz});$('count').textContent=samples.length;draw()}requestAnimationFrame(loop)}
-function stop(){running=false;if(watchId!==null)navigator.geolocation.clearWatch(watchId);watchId=null;if(stream)stream.getTracks().forEach(x=>x.stop());if(ctxAudio)ctxAudio.close();$('start').disabled=false;$('stop').disabled=true;setStatus('Scan stopped. You can export the recorded samples or start another scan.');draw()}
-function exportCSV(){let rows=['time,latitude,longitude,gps_accuracy_m,audio_db,dominant_hz',...samples.map(s=>[s.time,s.lat,s.lon,s.accuracy,s.db,s.hz].join(','))];let blob=new Blob([rows.join('\n')],{type:'text/csv'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='vanquish-scan-'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-$('start').onclick=start;$('stop').onclick=stop;$('export').onclick=exportCSV;$('sens').oninput=draw;draw();if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+const $=x=>document.getElementById(x);
+let map=L.map('map',{zoomControl:true}).setView([35.5,-95.4],18);
+let imagery=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
+ maxZoom:20, attribution:'Tiles © Esri'
+}).addTo(map);
+let heat=L.heatLayer([],{radius:28,blur:22,maxZoom:20,minOpacity:.12,gradient:{0.15:'#244cff',0.35:'#00d5ff',0.55:'#00db63',0.75:'#ffe600',1:'#ff2b1a'}}).addTo(map);
+let track=L.polyline([],{weight:3,opacity:.65}).addTo(map);
+let points=L.layerGroup(),accuracyLayer=L.layerGroup(); let firstFix=true;
+
+let ctxAudio,analyser,stream,watchId=null,running=false,latestPos=null;
+let raw=[],detections=[],calibrating=false,calVals=[],noiseFloor=-50,lastSample=0,lastEvent=0;
+const FFT=4096,MINHZ=180,MAXHZ=4200,SAMPLE_MS=100;
+
+function rmsDb(a){let s=0;for(let v of a){let x=(v-128)/128;s+=x*x}return 20*Math.log10(Math.sqrt(s/a.length)||1e-8)}
+function median(a){if(!a.length)return -50;let b=[...a].sort((x,y)=>x-y);return b[Math.floor(b.length/2)]}
+function spectrum(fd,sr){let bh=sr/FFT,lo=Math.ceil(MINHZ/bh),hi=Math.min(fd.length-1,Math.floor(MAXHZ/bh)),peak=-1,pi=lo,sum=0,n=0;for(let i=lo;i<=hi;i++){sum+=fd[i];n++;if(fd[i]>peak){peak=fd[i];pi=i}}return{hz:pi*bh,prom:peak-sum/n}}
+function family(h){if(h>=450&&h<=550)return"≈500 Hz response";if(h>=850&&h<=1100)return"≈1 kHz response";if(h>=2500&&h<=3300)return"High-tone response";return"Other tone"}
+function calcScore(db,h,p){let over=db-noiseFloor,th=+$('threshold').value;if(h<MINHZ||h>MAXHZ||over<th||p<12)return 0;let lv=Math.max(0,Math.min(1,(over-th)/20)),tn=Math.max(0,Math.min(1,(p-12)/55));return Math.round(100*(.72*lv+.28*tn))}
+function startGPS(){
+ watchId=navigator.geolocation.watchPosition(p=>{
+  latestPos={lat:p.coords.latitude,lon:p.coords.longitude,accuracy:p.coords.accuracy};
+  $('acc').textContent=p.coords.accuracy.toFixed(1)+' m';
+  track.addLatLng([latestPos.lat,latestPos.lon]);
+  if(firstFix){map.setView([latestPos.lat,latestPos.lon],19);firstFix=false}
+  redrawAccuracy();
+ },e=>$('status').textContent='GPS: '+e.message,{enableHighAccuracy:true,maximumAge:0,timeout:15000})
+}
+async function start(){
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  ctxAudio=new(window.AudioContext||window.webkitAudioContext)();await ctxAudio.resume();
+  analyser=ctxAudio.createAnalyser();analyser.fftSize=FFT;analyser.smoothingTimeConstant=.25;
+  ctxAudio.createMediaStreamSource(stream).connect(analyser);
+  raw=[];detections=[];track.setLatLngs([]);points.clearLayers();accuracyLayer.clearLayers();updateHeat();firstFix=true;
+  running=true;$('start').disabled=true;$('stop').disabled=false;$('cal').disabled=false;$('export').disabled=false;
+  calibrate();startGPS();requestAnimationFrame(loop);
+ }catch(e){$('status').textContent='Start failed: '+e.message}
+}
+function calibrate(){calibrating=true;calVals=[];$('status').textContent='Calibrating for 2 seconds… keep detector quiet.';setTimeout(()=>{noiseFloor=median(calVals);calibrating=false;$('noise').textContent=noiseFloor.toFixed(1);$('status').textContent='Scanning — detected responses will build the heat surface.'},2000)}
+function loop(t){
+ if(!running)return;
+ if(t-lastSample>=SAMPLE_MS){
+  lastSample=t;let td=new Uint8Array(analyser.fftSize),fd=new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteTimeDomainData(td);analyser.getByteFrequencyData(fd);
+  let db=rmsDb(td),sp=spectrum(fd,ctxAudio.sampleRate);if(calibrating)calVals.push(db);
+  let sc=calibrating?0:calcScore(db,sp.hz,sp.prom);if(!calibrating&&sc===0)noiseFloor=noiseFloor*.985+db*.015;
+  $('db').textContent=db.toFixed(1)+' dB';$('noise').textContent=noiseFloor.toFixed(1);$('hz').textContent=sp.prom>=12?sp.hz.toFixed(0)+' Hz':'-- Hz';$('family').textContent=sp.prom>=12?family(sp.hz):'No stable tone';$('score').textContent=sc;$('bar').style.width=sc+'%';
+  let r={time:new Date().toISOString(),lat:latestPos?.lat??'',lon:latestPos?.lon??'',accuracy:latestPos?.accuracy??'',db,noise:noiseFloor,hz:sp.hz,prom:sp.prom,score:sc,family:family(sp.hz)};raw.push(r);
+  if(sc>=15&&latestPos&&t-lastEvent>180){detections.push({...r});lastEvent=t;$('events').textContent=detections.length;updateHeat();addPoint(r)}
+ }
+ requestAnimationFrame(loop)
+}
+function updateHeat(){
+ let a=detections.map(p=>[+p.lat,+p.lon,Math.max(.05,p.score/100)]);
+ heat.setLatLngs(a);heat.setOptions({radius:+$('radius').value,blur:Math.round(+$('radius').value*.8),minOpacity:+$('opacity').value/100*.2});
+ if($('heatToggle').checked&&!map.hasLayer(heat))heat.addTo(map);heat.getPane().style.opacity=+$('opacity').value/100
+}
+function addPoint(p){
+ let c=L.circleMarker([p.lat,p.lon],{radius:3+p.score/20,weight:1,fillOpacity:.45,opacity:.7});
+ c.bindPopup(`<b>Score ${p.score}</b><br>${p.hz.toFixed(0)} Hz<br>${p.db.toFixed(1)} dB<br>GPS ±${(+p.accuracy).toFixed(1)} m`);
+ points.addLayer(c)
+}
+function redrawAccuracy(){accuracyLayer.clearLayers();if(latestPos&&$('accuracyToggle').checked)L.circle([latestPos.lat,latestPos.lon],{radius:latestPos.accuracy,weight:1,fillOpacity:.05}).addTo(accuracyLayer)}
+function stop(){running=false;if(watchId!==null)navigator.geolocation.clearWatch(watchId);watchId=null;if(stream)stream.getTracks().forEach(x=>x.stop());if(ctxAudio)ctxAudio.close();$('start').disabled=false;$('stop').disabled=true;$('cal').disabled=true;$('status').textContent='Stopped. Heat map remains available for review.'}
+function esc(v){let s=String(v??'');return /[,"\n]/.test(s)?'"'+s.replaceAll('"','""')+'"':s}
+function exportCSV(){let h=['time','latitude','longitude','gps_accuracy_m','audio_db','noise_floor_db','db_above_noise','dominant_hz','spectral_prominence','target_score','tone_family'];let z=[h.join(',')];for(let r of raw)z.push([r.time,r.lat,r.lon,r.accuracy,r.db.toFixed(3),r.noise.toFixed(3),(r.db-r.noise).toFixed(3),r.hz.toFixed(3),r.prom.toFixed(2),r.score,r.family].map(esc).join(','));let b=new Blob([z.join('\n')],{type:'text/csv'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='vanquish_scan_v3.csv';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+$('start').onclick=start;$('stop').onclick=stop;$('cal').onclick=calibrate;$('export').onclick=exportCSV;
+$('center').onclick=()=>{if(latestPos)map.setView([latestPos.lat,latestPos.lon],19)};
+$('threshold').oninput=e=>$('thrval').textContent=e.target.value+' dB';
+$('opacity').oninput=e=>{$('opval').textContent=e.target.value+'%';updateHeat()};
+$('radius').oninput=e=>{$('radval').textContent=e.target.value;updateHeat()};
+$('imagery').onchange=e=>e.target.checked?imagery.addTo(map):map.removeLayer(imagery);
+$('heatToggle').onchange=e=>e.target.checked?heat.addTo(map):map.removeLayer(heat);
+$('trackToggle').onchange=e=>e.target.checked?track.addTo(map):map.removeLayer(track);
+$('pointToggle').onchange=e=>e.target.checked?points.addTo(map):map.removeLayer(points);
+$('accuracyToggle').onchange=e=>{if(e.target.checked){accuracyLayer.addTo(map);redrawAccuracy()}else map.removeLayer(accuracyLayer)};
 </script></body></html>
